@@ -36,8 +36,8 @@ The Movie Listing API is a FastAPI-based application that allows users to manage
 
 ### Clone the Repository
 ```bash
-git clone https://github.com/your-username/movie-listing-api.git
-cd movie-listing-api
+git clone https://github.com/dunnie99/capstone.git
+cd capstone
 ```
 ### Create and Activate a Virtual Environment
 ```bash 
