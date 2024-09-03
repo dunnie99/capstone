@@ -1,92 +1,96 @@
 from bson import ObjectId
-from app.databse import movie_collection, rating_collection, comment_collection
-from app.models import movie_helper, rating_helper, comment_helper
-from app.schemas import RatingCreate, MovieCreate, CommentCreate
+from app import auth
+from app.databse import user_collection, movie_collection, rating_collection, comment_collection
+from app.schemas import UserCreate, MovieCreate, RatingCreate, CommentCreate, Movie, Rating, Comment
+from typing import List, Dict
+import logging
 
-# Function to create a new movie
-async def create_movie(movie: MovieCreate, owner_id: str):
-    movie_data = movie.dict()
-    movie_data["owner_id"] = ObjectId(owner_id)
-    new_movie = await movie_collection.insert_one(movie_data)
-    created_movie = await movie_collection.find_one({"_id": new_movie.inserted_id})
-    return movie_helper(created_movie)
+async def create_user(user_create: UserCreate) -> Dict[str, str]:
+    try:
+        user = {
+            "username": user_create.username,
+            "hashed_password": auth.get_password_hash(user_create.password)
+        }
+        result = await user_collection.insert_one(user)
+        user_id = result.inserted_id
+        return {
+            "id": str(user_id),
+            "username": user_create.username
+        }
+    except Exception as e:
+        logging.error(f"Error creating user: {str(e)}")
+        raise
 
-# Function to retrieve a movie by its ID, including associated ratings
-async def get_movie(movie_id: str):
-    movie = await movie_collection.find_one({"_id": ObjectId(movie_id)})
-    if movie:
-        # Fetch and attach ratings associated with this movie
-        ratings = []
-        async for rating in rating_collection.find({"movie_id": ObjectId(movie_id)}):
-            ratings.append(rating_helper(rating))
-        movie_data = movie_helper(movie)
-        movie_data["ratings"] = ratings
-        return movie_data
-    return None
-
-# Function to retrieve all ratings for a specific movie
-async def get_ratings(movie_id: str):
-    ratings = []
-    async for rating in rating_collection.find({"movie_id": ObjectId(movie_id)}):
-        ratings.append(rating_helper(rating))
-    return ratings
-
-# Function to update an existing movie
-async def update_movie(movie_id: str, movie: MovieCreate, owner_id: str):
-    movie_data = movie.dict()
-    updated_movie = await movie_collection.update_one(
-        {"_id": ObjectId(movie_id), "owner_id": ObjectId(owner_id)},
-        {"$set": movie_data}
-    )
-    if updated_movie.modified_count:
-        return await get_movie(movie_id)
-    return None
-
-# Function to delete a movie
-async def delete_movie(movie_id: str, owner_id: str):
-    deleted_movie = await movie_collection.delete_one(
-        {"_id": ObjectId(movie_id), "owner_id": ObjectId(owner_id)}
-    )
-    return bool(deleted_movie.deleted_count)
-
-# Function to create a rating for a movie
-async def rate_movie(rating: RatingCreate, user_id: str):
-    rating_data = rating.dict()
-    rating_data["user_id"] = ObjectId(user_id)
-    rating_data["movie_id"] = ObjectId(rating.movie_id)
+async def create_movie(movie: MovieCreate, token: str) -> Movie:
+    try:
+        # Decode token to get the user information
+        token_data = auth.decode_token(token)
+        if token_data is None:
+            raise Exception("Invalid or expired token")
+        
+        user = await auth.get_user(token_data["username"])
+        if user is None:
+            raise Exception("User not found")
+        
+        movie_data = movie.dict()
+        movie_data["owner_id"] = ObjectId(user["_id"])
+        new_movie = await movie_collection.insert_one(movie_data)
+        created_movie = await movie_collection.find_one({"_id": new_movie.inserted_id})
+        return Movie(**created_movie)
+    except Exception as e:
+        logging.error(f"Error creating movie: {str(e)}")
+        raise
     
-    new_rating = await rating_collection.insert_one(rating_data)
-    created_rating = await rating_collection.find_one({"_id": new_rating.inserted_id})
-    return rating_helper(created_rating)
 
-# Function to retrieve a list of movies, including associated ratings (optional pagination)
-async def get_movies(skip: int = 0, limit: int = 10):
-    movies = []
-    async for movie in movie_collection.find().skip(skip).limit(limit):
-        movie_data = movie_helper(movie)
-        ratings = []
-        async for rating in rating_collection.find({"movie_id": movie["_id"]}):
-            ratings.append(rating_helper(rating))
-        movie_data["ratings"] = ratings
-        movies.append(movie_data)
-    return movies
-# Function to create a comment for a movie
-async def create_comment(comment: CommentCreate, user_id: str):
-    comment_data = comment.dict()
-    comment_data["user_id"] = ObjectId(user_id)
-    comment_data["movie_id"] = ObjectId(comment.movie_id)
-    
-    # If it's a nested comment, parent_id should be an ObjectId
-    if comment_data.get("parent_id"):
-        comment_data["parent_id"] = ObjectId(comment_data["parent_id"])
-    
-    new_comment = await comment_collection.insert_one(comment_data)
-    created_comment = await comment_collection.find_one({"_id": new_comment.inserted_id})
-    return comment_helper(created_comment)
+async def get_movies(skip: int = 0, limit: int = 10) -> List[Movie]:
+    try:
+        cursor = movie_collection.find().skip(skip).limit(limit)
+        movies = await cursor.to_list(length=limit)
+        return [Movie(**movie) for movie in movies]
+    except Exception as e:
+        logging.error(f"Error retrieving movies: {str(e)}")
+        raise
 
-# Function to retrieve comments for a movie
-async def get_comments(movie_id: str):
-    comments = []
-    async for comment in comment_collection.find({"movie_id": ObjectId(movie_id)}):
-        comments.append(comment_helper(comment))
-    return comments
+async def rate_movie(rating: RatingCreate, token: str) -> Rating:
+    try:
+        # Decode token to get the user information
+        token_data = auth.decode_token(token)
+        if token_data is None:
+            raise Exception("Invalid or expired token")
+        
+        user = await auth.get_user(token_data["username"])
+        if user is None:
+            raise Exception("User not found")
+        
+        rating_data = rating.dict()
+        rating_data["user_id"] = ObjectId(user["_id"])
+        rating_data["movie_id"] = ObjectId(rating.movie_id)
+        new_rating = await rating_collection.insert_one(rating_data)
+        created_rating = await rating_collection.find_one({"_id": new_rating.inserted_id})
+        return Rating(**created_rating)
+    except Exception as e:
+        logging.error(f"Error rating movie: {str(e)}")
+        raise
+
+async def create_comment(comment: CommentCreate, token: str) -> Comment:
+    try:
+        # Decode token to get the user information
+        token_data = auth.decode_token(token)
+        if token_data is None:
+            raise Exception("Invalid or expired token")
+        
+        user = await auth.get_user(token_data["username"])
+        if user is None:
+            raise Exception("User not found")
+        
+        comment_data = comment.dict()
+        comment_data["user_id"] = ObjectId(user["_id"])
+        comment_data["movie_id"] = ObjectId(comment.movie_id)
+        if comment_data.get("parent_id"):
+            comment_data["parent_id"] = ObjectId(comment_data["parent_id"])
+        new_comment = await comment_collection.insert_one(comment_data)
+        created_comment = await comment_collection.find_one({"_id": new_comment.inserted_id})
+        return Comment(**created_comment)
+    except Exception as e:
+        logging.error(f"Error creating comment: {str(e)}")
+        raise
